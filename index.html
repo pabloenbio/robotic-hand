@@ -1,0 +1,278 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+
+  <title>Robotic Hand Controller</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+  <style>
+    body {
+      background: #111;
+      color: white;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 12px;
+    }
+
+    canvas {
+      width: 100%;
+      max-width: 550px;
+      border-radius: 12px;
+      background: #222;
+    }
+
+    video {
+      display: none;
+    }
+
+    button {
+      background: #ddd;
+      color: black;
+      padding: 14px 25px;
+      border: none;
+      border-radius: 8px;
+      font-size: 17px;
+      margin: 10px;
+    }
+
+    .finger {
+      background: #252525;
+      padding: 12px;
+      margin: 8px auto;
+      max-width: 500px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .open { color: #40e080; }
+    .closed { color: #ff6060; }
+
+    #command {
+      font-size: 36px;
+      font-family: monospace;
+      margin: 15px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Robotic Hand Controller</h2>
+
+  <button id="start">Start Camera</button>
+
+  <p id="message">Camera not started</p>
+
+  <video id="video" playsinline muted></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+
+  <div class="finger">
+    <span>THUMB</span>
+    <strong id="thumb">---</strong>
+  </div>
+
+  <div class="finger">
+    <span>INDEX</span>
+    <strong id="index">---</strong>
+  </div>
+
+  <div class="finger">
+    <span>MIDDLE</span>
+    <strong id="middle">---</strong>
+  </div>
+
+  <div class="finger">
+    <span>RING + PINKY</span>
+    <strong id="ring">---</strong>
+  </div>
+
+  <h3>ESP32 Command</h3>
+  <div id="command">----</div>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const message = document.getElementById("message");
+
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function angle(a, b, c) {
+      const abx = a.x - b.x;
+      const aby = a.y - b.y;
+
+      const cbx = c.x - b.x;
+      const cby = c.y - b.y;
+
+      const dot = abx * cbx + aby * cby;
+
+      const mag1 = Math.hypot(abx, aby);
+      const mag2 = Math.hypot(cbx, cby);
+
+      if (mag1 * mag2 === 0) return 0;
+
+      const cosine = Math.max(
+        -1,
+        Math.min(1, dot / (mag1 * mag2))
+      );
+
+      return Math.acos(cosine) * 180 / Math.PI;
+    }
+
+    function fingerOpen(hand, mcp, pip, tip) {
+      return angle(
+        hand[mcp],
+        hand[pip],
+        hand[tip]
+      ) > 145;
+    }
+
+    function thumbOpen(hand) {
+      const thumbDistance = distance(hand[4], hand[17]);
+      const palmWidth = distance(hand[5], hand[17]);
+
+      if (palmWidth === 0) return false;
+
+      return thumbDistance / palmWidth > 1.0;
+    }
+
+    function displayState(id, state) {
+      const element = document.getElementById(id);
+
+      element.textContent = state ? "OPEN" : "CLOSED";
+      element.className = state ? "open" : "closed";
+    }
+
+    const hands = new Hands({
+      locateFile: file =>
+        "https://cdn.jsdelivr.net/npm/@mediapipe/hands/" + file
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.65,
+      minTrackingConfidence: 0.55
+    });
+
+    hands.onResults(results => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+
+      ctx.drawImage(
+        results.image,
+        0, 0,
+        canvas.width,
+        canvas.height
+      );
+
+      if (results.multiHandLandmarks?.length) {
+        const hand = results.multiHandLandmarks[0];
+
+        drawConnectors(
+          ctx,
+          hand,
+          HAND_CONNECTIONS,
+          {color: "#00ff88", lineWidth: 3}
+        );
+
+        drawLandmarks(
+          ctx,
+          hand,
+          {color: "#ffff00", radius: 3}
+        );
+
+        const thumb = thumbOpen(hand);
+        const index = fingerOpen(hand, 5, 6, 8);
+        const middle = fingerOpen(hand, 9, 10, 12);
+        const ring = fingerOpen(hand, 13, 14, 16);
+        const pinky = fingerOpen(hand, 17, 18, 20);
+
+        // Combined fourth servo channel:
+        // OPEN if either ring or pinky is open.
+        const ringPinky = ring || pinky;
+
+        displayState("thumb", thumb);
+        displayState("index", index);
+        displayState("middle", middle);
+        displayState("ring", ringPinky);
+
+        const states = [
+          thumb,
+          index,
+          middle,
+          ringPinky
+        ];
+
+        const command = states
+          .map(state => state ? "1" : "0")
+          .join("");
+
+        document.getElementById("command").textContent =
+          command;
+
+        message.textContent = "Hand detected";
+      } else {
+        message.textContent = "Show your hand to the camera";
+        document.getElementById("command").textContent = "----";
+
+        for (const id of ["thumb", "index", "middle", "ring"]) {
+          document.getElementById(id).textContent = "---";
+        }
+      }
+
+      ctx.restore();
+    });
+
+    document.getElementById("start").onclick = async () => {
+      const button = document.getElementById("start");
+      button.disabled = true;
+      message.textContent = "Starting camera...";
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: "user",
+            width: {ideal: 640},
+            height: {ideal: 480}
+          }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        async function processFrame() {
+          if (video.readyState >= 2) {
+            await hands.send({image: video});
+          }
+
+          requestAnimationFrame(processFrame);
+        }
+
+        processFrame();
+        button.style.display = "none";
+
+      } catch (error) {
+        message.textContent = "Error: " + error.message;
+        button.disabled = false;
+      }
+    };
+  </script>
+
+</body>
+</html>
+
