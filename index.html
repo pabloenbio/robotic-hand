@@ -1,377 +1,281 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1">
-
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Robotic Hand Controller</title>
-
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-
   <style>
-    body {
-      background: #111;
-      color: white;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      padding: 12px;
-    }
-
-    canvas {
-      width: 100%;
-      max-width: 550px;
-      border-radius: 12px;
-      background: #222;
-    }
-
-    video {
-      display: none;
-    }
-
-    button {
-      background: #ddd;
-      color: black;
-      padding: 14px 25px;
-      border: none;
-      border-radius: 8px;
-      font-size: 17px;
-      margin: 10px;
-    }
-
-    .finger {
-      background: #252525;
-      padding: 12px;
-      margin: 8px auto;
-      max-width: 500px;
-      border-radius: 8px;
-      display: flex;
-      justify-content: space-between;
-    }
-
-    .open { color: #40e080; }
-    .closed { color: #ff6060; }
-
-    #command {
-      font-size: 36px;
-      font-family: monospace;
-      margin: 15px;
-    }
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101317; color: #f5f7fa; padding: 18px; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 1.55rem; margin: 4px 0 6px; }
+    p { color: #aab4c2; line-height: 1.45; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+    button { border: 0; border-radius: 10px; padding: 13px 17px; background: #64b5f6; color: #07131e; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.secondary { background: #293440; color: #f5f7fa; }
+    .panel { background: #1b222a; border: 1px solid #34404d; border-radius: 14px; padding: 14px; margin: 12px 0; }
+    #view { width: 100%; display: block; border-radius: 10px; background: #080a0d; transform: scaleX(-1); }
+    .camera-wrap { overflow: hidden; border-radius: 10px; background: #080a0d; }
+    .status { margin: 5px 0; font-size: .95rem; overflow-wrap: anywhere; }
+    .command { font-size: 2.6rem; font-weight: 800; letter-spacing: .24em; font-variant-numeric: tabular-nums; margin: 6px 0; }
+    .fingers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+    .finger { background: #27323d; padding: 10px; border-radius: 9px; }
+    .finger strong { display: block; margin-top: 3px; }
+    .open { color: #7de0a6; } .closed { color: #ffad8c; }
+    small { color: #aab4c2; }
   </style>
 </head>
-
 <body>
+<main>
+  <h1>Robotic Hand Controller</h1>
+  <p>Track one hand and send four open/closed finger states to your ESP32 over Bluetooth.</p>
 
-  <h2>Robotic Hand Controller</h2>
-<button id="connectESP32">Connect ESP32</button>
-<p id="bluetoothStatus">ESP32 disconnected</p>
-  <button id="start">Start Camera</button>
-
-  <p id="message">Camera not started</p>
-
-  <video id="video" playsinline muted></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
-
-  <div class="finger">
-    <span>THUMB</span>
-    <strong id="thumb">---</strong>
+  <div class="buttons">
+    <button id="connectESP32" type="button">Connect ESP32</button>
+    <button id="startCamera" type="button" class="secondary">Start Camera</button>
+    <button id="stopCamera" type="button" class="secondary" disabled>Stop Camera</button>
   </div>
 
-  <div class="finger">
-    <span>INDEX</span>
-    <strong id="index">---</strong>
+  <section class="panel">
+    <div id="bluetoothStatus" class="status">Bluetooth: disconnected</div>
+    <div id="cameraStatus" class="status">Camera: stopped</div>
+    <div id="sendStatus" class="status">Last sent: none</div>
+  </section>
+
+  <div class="camera-wrap">
+    <video id="video" autoplay muted playsinline style="display:none"></video>
+    <canvas id="view" width="640" height="480"></canvas>
   </div>
 
-  <div class="finger">
-    <span>MIDDLE</span>
-    <strong id="middle">---</strong>
-  </div>
+  <section class="panel">
+    <small>COMMAND (1 = OPEN, 0 = CLOSED)</small>
+    <div id="command" class="command">----</div>
+    <div class="fingers">
+      <div class="finger">Thumb<strong id="thumbState">Not detected</strong></div>
+      <div class="finger">Index<strong id="indexState">Not detected</strong></div>
+      <div class="finger">Middle<strong id="middleState">Not detected</strong></div>
+      <div class="finger">Ring + Pinky<strong id="ringPinkyState">Not detected</strong></div>
+    </div>
+  </section>
+  <p><small>Use Android Chrome on the published HTTPS GitHub Pages URL. Connect Bluetooth by tapping the button; it cannot connect automatically.</small></p>
+</main>
 
-  <div class="finger">
-    <span>RING + PINKY</span>
-    <strong id="ring">---</strong>
-  </div>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script>
+'use strict';
 
-  <h3>ESP32 Command</h3>
-  <div id="command">----</div>
+// Matches the ESP32 sketch provided earlier.
+const SERVICE_UUID = '12345678-1234-1234-1234-1234567890ab';
+const CHAR_UUID = '12345678-1234-1234-1234-1234567890ac';
 
-  <script>
-    
-const SERVICE_UUID =
-  "12345678-1234-1234-1234-1234567890ab";
-
-const CHAR_UUID =
-  "12345678-1234-1234-1234-1234567890ac";
+const $ = id => document.getElementById(id);
+const video = $('video');
+const canvas = $('view');
+const ctx = canvas.getContext('2d');
+const connectButton = $('connectESP32');
+const startButton = $('startCamera');
+const stopButton = $('stopCamera');
 
 let bleDevice = null;
 let bleCharacteristic = null;
-let lastCommand = "";
-let sending = false;
+let lastSent = null;
 let latestCommand = null;
+let sending = false;
+let cameraStream = null;
+let cameraRunning = false;
+let framePending = false;
+let hands = null;
 
-const bluetoothStatus =
-  document.getElementById("bluetoothStatus");
+function setFinger(id, isOpen) {
+  const element = $(id);
+  element.textContent = isOpen ? 'OPEN' : 'CLOSED';
+  element.className = isOpen ? 'open' : 'closed';
+}
 
-document.getElementById("connectESP32")
-  .addEventListener("click", connectESP32);
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+function angle(a, b, c) {
+  const abx = a.x - b.x, aby = a.y - b.y;
+  const cbx = c.x - b.x, cby = c.y - b.y;
+  const denominator = Math.hypot(abx, aby) * Math.hypot(cbx, cby);
+  if (!denominator) return 0;
+  const cosine = Math.max(-1, Math.min(1, (abx * cbx + aby * cby) / denominator));
+  return Math.acos(cosine) * 180 / Math.PI;
+}
+function fingerExtended(lm, mcp, pip, tip) {
+  return angle(lm[mcp], lm[pip], lm[tip]) > 145;
+}
+
+function onResults(results) {
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (results.image) ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+  const landmarks = results.multiHandLandmarks && results.multiHandLandmarks[0];
+  if (!landmarks) {
+    $('command').textContent = '----';
+    ['thumbState', 'indexState', 'middleState', 'ringPinkyState'].forEach(id => {
+      $(id).textContent = 'Not detected';
+      $(id).className = '';
+    });
+    // No hand: do not send a false "all closed" command.
+    ctx.restore();
+    return;
+  }
+
+  drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#62e7b0', lineWidth: 3});
+  drawLandmarks(ctx, landmarks, {color: '#ffb26b', lineWidth: 1, radius: 3});
+  ctx.restore();
+
+  // Thumb: tip distance from pinky base, normalized by palm width.
+  const palmWidth = Math.max(distance(landmarks[5], landmarks[17]), 0.001);
+  const thumb = distance(landmarks[4], landmarks[17]) / palmWidth > 1.0;
+  const index = fingerExtended(landmarks, 5, 6, 8);
+  const middle = fingerExtended(landmarks, 9, 10, 12);
+  const ring = fingerExtended(landmarks, 13, 14, 16);
+  const pinky = fingerExtended(landmarks, 17, 18, 20);
+  const ringPinky = ring || pinky;
+
+  setFinger('thumbState', thumb);
+  setFinger('indexState', index);
+  setFinger('middleState', middle);
+  setFinger('ringPinkyState', ringPinky);
+
+  const states = [thumb, index, middle, ringPinky];
+  const command = states.map(state => state ? '1' : '0').join('');
+  $('command').textContent = command;
+  sendFingerCommand(command);
+}
+
+async function initializeHands() {
+  if (hands) return;
+  if (typeof Hands === 'undefined') throw new Error('MediaPipe did not load. Check internet access.');
+  hands = new Hands({
+    locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.65,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults(onResults);
+}
+
+async function cameraLoop() {
+  if (!cameraRunning) return;
+  if (video.readyState >= 2 && !framePending) {
+    framePending = true;
+    try {
+      await hands.send({image: video});
+    } catch (error) {
+      console.error('Hand tracking error:', error);
+      $('cameraStatus').textContent = 'Tracking error: ' + error.message;
+      stopCamera();
+    } finally {
+      framePending = false;
+    }
+  }
+  if (cameraRunning) requestAnimationFrame(cameraLoop);
+}
+
+async function startCamera() {
+  if (cameraRunning) return;
+  startButton.disabled = true;
+  $('cameraStatus').textContent = 'Camera: loading hand tracker...';
+  try {
+    await initializeHands();
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {facingMode: 'user', width: {ideal: 640}, height: {ideal: 480}}
+    });
+    video.srcObject = cameraStream;
+    await video.play();
+    cameraRunning = true;
+    stopButton.disabled = false;
+    $('cameraStatus').textContent = 'Camera: tracking';
+    requestAnimationFrame(cameraLoop);
+  } catch (error) {
+    $('cameraStatus').textContent = 'Camera error: ' + error.message;
+    startButton.disabled = false;
+    if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+}
+function stopCamera() {
+  cameraRunning = false;
+  if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+  cameraStream = null;
+  video.srcObject = null;
+  startButton.disabled = false;
+  stopButton.disabled = true;
+  $('cameraStatus').textContent = 'Camera: stopped';
+  $('command').textContent = '----';
+}
 
 async function connectESP32() {
+  if (!navigator.bluetooth) {
+    $('bluetoothStatus').textContent = 'Bluetooth unavailable: use Android Chrome over HTTPS.';
+    return;
+  }
   try {
-    bluetoothStatus.textContent = "Searching for ESP32...";
-
+    // requestDevice must be called directly from a user button click.
+    $('bluetoothStatus').textContent = 'Bluetooth: choose Robotic-Hand...';
     bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ name: "Robotic-Hand" }],
+      filters: [{name: 'Robotic-Hand'}],
       optionalServices: [SERVICE_UUID]
     });
-
-    bleDevice.addEventListener(
-      "gattserverdisconnected",
-      () => {
-        bleCharacteristic = null;
-        lastCommand = "";
-        bluetoothStatus.textContent = "ESP32 disconnected";
-      }
-    );
-
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      bleCharacteristic = null;
+      lastSent = null;
+      $('bluetoothStatus').textContent = 'Bluetooth: disconnected. Tap Connect ESP32 again.';
+      connectButton.textContent = 'Reconnect ESP32';
+    });
     const server = await bleDevice.gatt.connect();
-
-    const service =
-      await server.getPrimaryService(SERVICE_UUID);
-
-    bleCharacteristic =
-      await service.getCharacteristic(CHAR_UUID);
-
-    lastCommand = "";
-    bluetoothStatus.textContent = "ESP32 connected!";
-
-    // Send the latest detected hand position on connection.
-    if (latestCommand !== null) {
-      sendFingerCommand(latestCommand);
-    }
-
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    bleCharacteristic = await service.getCharacteristic(CHAR_UUID);
+    lastSent = null;
+    $('bluetoothStatus').textContent = 'Bluetooth: connected to Robotic-Hand';
+    connectButton.textContent = 'Reconnect ESP32';
+    if (latestCommand) sendFingerCommand(latestCommand);
   } catch (error) {
-    bluetoothStatus.textContent =
-      "Bluetooth error: " + error.message;
-
+    $('bluetoothStatus').textContent = 'Bluetooth error: ' + error.message;
     console.error(error);
   }
 }
 
-// Call this whenever your hand-tracking result changes.
 async function sendFingerCommand(command) {
   if (!/^[01]{4}$/.test(command)) return;
-
   latestCommand = command;
-
-  if (!bleCharacteristic || sending) return;
-  if (command === lastCommand) return;
-
+  if (!bleCharacteristic || sending || command === lastSent) return;
   sending = true;
-
+  let succeeded = false;
   try {
     const data = new TextEncoder().encode(command);
-
     await bleCharacteristic.writeValueWithResponse(data);
-
-    lastCommand = command;
-    console.log("Sent to ESP32:", command);
-
+    lastSent = command;
+    succeeded = true;
+    $('sendStatus').textContent = 'Last sent: ' + command;
   } catch (error) {
-    console.error("BLE write failed:", error);
-
+    $('sendStatus').textContent = 'Send error: ' + error.message;
+    console.error(error);
   } finally {
     sending = false;
-
-    // If tracking changed while Bluetooth was busy,
-    // send the newest state instead of old queued frames.
-    if (
-      bleCharacteristic &&
-      latestCommand !== lastCommand
-    ) {
+    if (succeeded && bleCharacteristic && latestCommand !== lastSent) {
       sendFingerCommand(latestCommand);
     }
   }
 }
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-
-    const message = document.getElementById("message");
-
-    function distance(a, b) {
-      return Math.hypot(a.x - b.x, a.y - b.y);
-    }
-
-    function angle(a, b, c) {
-      const abx = a.x - b.x;
-      const aby = a.y - b.y;
-
-      const cbx = c.x - b.x;
-      const cby = c.y - b.y;
-
-      const dot = abx * cbx + aby * cby;
-
-      const mag1 = Math.hypot(abx, aby);
-      const mag2 = Math.hypot(cbx, cby);
-
-      if (mag1 * mag2 === 0) return 0;
-
-      const cosine = Math.max(
-        -1,
-        Math.min(1, dot / (mag1 * mag2))
-      );
-
-      return Math.acos(cosine) * 180 / Math.PI;
-    }
-
-    function fingerOpen(hand, mcp, pip, tip) {
-      return angle(
-        hand[mcp],
-        hand[pip],
-        hand[tip]
-      ) > 145;
-    }
-
-    function thumbOpen(hand) {
-      const thumbDistance = distance(hand[4], hand[17]);
-      const palmWidth = distance(hand[5], hand[17]);
-
-      if (palmWidth === 0) return false;
-
-      return thumbDistance / palmWidth > 1.0;
-    }
-
-    function displayState(id, state) {
-      const element = document.getElementById(id);
-
-      element.textContent = state ? "OPEN" : "CLOSED";
-      element.className = state ? "open" : "closed";
-    }
-
-    const hands = new Hands({
-      locateFile: file =>
-        "https://cdn.jsdelivr.net/npm/@mediapipe/hands/" + file
-    });
-
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 0,
-      minDetectionConfidence: 0.65,
-      minTrackingConfidence: 0.55
-    });
-
-    hands.onResults(results => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      ctx.save();
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-
-      ctx.drawImage(
-        results.image,
-        0, 0,
-        canvas.width,
-        canvas.height
-      );
-
-      if (results.multiHandLandmarks?.length) {
-        const hand = results.multiHandLandmarks[0];
-
-        drawConnectors(
-          ctx,
-          hand,
-          HAND_CONNECTIONS,
-          {color: "#00ff88", lineWidth: 3}
-        );
-
-        drawLandmarks(
-          ctx,
-          hand,
-          {color: "#ffff00", radius: 3}
-        );
-
-        const thumb = thumbOpen(hand);
-        const index = fingerOpen(hand, 5, 6, 8);
-        const middle = fingerOpen(hand, 9, 10, 12);
-        const ring = fingerOpen(hand, 13, 14, 16);
-        const pinky = fingerOpen(hand, 17, 18, 20);
-
-        // Combined fourth servo channel:
-        // OPEN if either ring or pinky is open.
-        const ringPinky = ring || pinky;
-
-        displayState("thumb", thumb);
-        displayState("index", index);
-        displayState("middle", middle);
-        displayState("ring", ringPinky);
-
-        const states = [
-          thumb,
-          index,
-          middle,
-          ringPinky
-        ];
-
-        const command = states
-          .map(state => state ? "1" : "0")
-          .join("");
-        sendFingerCommand(command);
-
-        document.getElementById("command").textContent =
-          command;
-
-        message.textContent = "Hand detected";
-      } else {
-        message.textContent = "Show your hand to the camera";
-        document.getElementById("command").textContent = "----";
-
-        for (const id of ["thumb", "index", "middle", "ring"]) {
-          document.getElementById(id).textContent = "---";
-        }
-      }
-
-      ctx.restore();
-    });
-
-    document.getElementById("start").onclick = async () => {
-      const button = document.getElementById("start");
-      button.disabled = true;
-      message.textContent = "Starting camera...";
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: "user",
-            width: {ideal: 640},
-            height: {ideal: 480}
-          }
-        });
-
-        video.srcObject = stream;
-        await video.play();
-
-        async function processFrame() {
-          if (video.readyState >= 2) {
-            await hands.send({image: video});
-          }
-
-          requestAnimationFrame(processFrame);
-        }
-
-        processFrame();
-        button.style.display = "none";
-
-      } catch (error) {
-        message.textContent = "Error: " + error.message;
-        button.disabled = false;
-      }
-    };
-  </script>
-
+connectButton.addEventListener('click', connectESP32);
+startButton.addEventListener('click', startCamera);
+stopButton.addEventListener('click', stopCamera);
+</script>
 </body>
 </html>
-
