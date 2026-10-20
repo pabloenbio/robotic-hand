@@ -65,7 +65,8 @@
 <body>
 
   <h2>Robotic Hand Controller</h2>
-
+<button id="connectESP32">Connect ESP32</button>
+<p id="bluetoothStatus">ESP32 disconnected</p>
   <button id="start">Start Camera</button>
 
   <p id="message">Camera not started</p>
@@ -97,6 +98,103 @@
   <div id="command">----</div>
 
   <script>
+    
+const SERVICE_UUID =
+  "12345678-1234-1234-1234-1234567890ab";
+
+const CHAR_UUID =
+  "12345678-1234-1234-1234-1234567890ac";
+
+let bleDevice = null;
+let bleCharacteristic = null;
+let lastCommand = "";
+let sending = false;
+let latestCommand = null;
+
+const bluetoothStatus =
+  document.getElementById("bluetoothStatus");
+
+document.getElementById("connectESP32")
+  .addEventListener("click", connectESP32);
+
+async function connectESP32() {
+  try {
+    bluetoothStatus.textContent = "Searching for ESP32...";
+
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "Robotic-Hand" }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    bleDevice.addEventListener(
+      "gattserverdisconnected",
+      () => {
+        bleCharacteristic = null;
+        lastCommand = "";
+        bluetoothStatus.textContent = "ESP32 disconnected";
+      }
+    );
+
+    const server = await bleDevice.gatt.connect();
+
+    const service =
+      await server.getPrimaryService(SERVICE_UUID);
+
+    bleCharacteristic =
+      await service.getCharacteristic(CHAR_UUID);
+
+    lastCommand = "";
+    bluetoothStatus.textContent = "ESP32 connected!";
+
+    // Send the latest detected hand position on connection.
+    if (latestCommand !== null) {
+      sendFingerCommand(latestCommand);
+    }
+
+  } catch (error) {
+    bluetoothStatus.textContent =
+      "Bluetooth error: " + error.message;
+
+    console.error(error);
+  }
+}
+
+// Call this whenever your hand-tracking result changes.
+async function sendFingerCommand(command) {
+  if (!/^[01]{4}$/.test(command)) return;
+
+  latestCommand = command;
+
+  if (!bleCharacteristic || sending) return;
+  if (command === lastCommand) return;
+
+  sending = true;
+
+  try {
+    const data = new TextEncoder().encode(command);
+
+    await bleCharacteristic.writeValueWithResponse(data);
+
+    lastCommand = command;
+    console.log("Sent to ESP32:", command);
+
+  } catch (error) {
+    console.error("BLE write failed:", error);
+
+  } finally {
+    sending = false;
+
+    // If tracking changed while Bluetooth was busy,
+    // send the newest state instead of old queued frames.
+    if (
+      bleCharacteristic &&
+      latestCommand !== lastCommand
+    ) {
+      sendFingerCommand(latestCommand);
+    }
+  }
+}
+
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
@@ -220,6 +318,7 @@
         const command = states
           .map(state => state ? "1" : "0")
           .join("");
+        sendFingerCommand(command);
 
         document.getElementById("command").textContent =
           command;
